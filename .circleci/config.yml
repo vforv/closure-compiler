@@ -1,0 +1,49 @@
+version: 2
+jobs:
+  test:
+    docker:
+      - image: amerbank/circleci2:0.1
+    steps:
+      - checkout
+      - run: |
+          npm i
+          npm test
+  build:
+    docker:
+      - image: amerbank/circleci2:0.1
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run: |
+          aws configure set default.region $AWS_REGION
+          aws configure set default.output json
+
+          export TAG=${CIRCLE_BRANCH}-0.1.${CIRCLE_BUILD_NUM}
+          export REPOSITORY_NAME="titan/titandas"
+
+          docker build -t ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPOSITORY_NAME}:${TAG} .
+
+          eval $(aws ecr get-login --region $AWS_REGION)
+          if aws ecr create-repository --repository-name $REPOSITORY_NAME ; then sleep 0 ; fi
+          docker push ${AWS_ACCOUNT_ID}.dkr.ecr.$AWS_REGION.amazonaws.com/$REPOSITORY_NAME:$TAG
+      - deploy:
+          name: Trigger production deployment if master branch
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "master" ]; then
+              export WORKFLOW=`cat workflow.json`
+              export TAG=${CIRCLE_BRANCH}-0.1.${CIRCLE_BUILD_NUM}
+              export REPOSITORY_NAME="titan/titandas"
+              aws sns publish --topic-arn arn:aws:sns:us-east-2:309418691331:titan-ci \
+                --message "{\"deploy\": true, \"tag\": \"${TAG}\", \"image\": \"${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPOSITORY_NAME}:${TAG}\", \"workflow\":${WORKFLOW}}"
+            else
+              echo "Deploying on master branch only."
+            fi
+workflows:
+  version: 2
+  test-n-build:
+    jobs:
+      - test
+      - build:
+          requires:
+            - test
+          context: org-global
